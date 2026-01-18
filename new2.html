@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DreamStep: The Star's Journey</title>
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;700&display=swap" rel="stylesheet">
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #050510; font-family: 'Montserrat', sans-serif; }
+        canvas { display: block; }
+        .ui { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 20; color: white; text-align: center; pointer-events: none; }
+        .interactive { pointer-events: auto; }
+        .hidden { display: none !important; }
+        #home-screen { background: radial-gradient(circle at center, #1e3c72 0%, #050510 100%); }
+        h1 { font-weight: 700; letter-spacing: 5px; font-size: 3.5rem; margin-bottom: 0; }
+        .btn-start { 
+            padding: 15px 40px; font-size: 1rem; background: #f39c12; color: white; border: none; border-radius: 50px; 
+            cursor: pointer; font-weight: 700; transition: 0.3s; text-transform: uppercase; letter-spacing: 2px; margin-top: 20px;
+        }
+        .btn-start:hover { transform: scale(1.05); background: #e67e22; box-shadow: 0 0 20px rgba(243, 156, 18, 0.4); }
+        #hud { position: absolute; top: 20px; left: 20px; z-index: 10; color: white; text-shadow: 2px 2px 4px rgba(0,0,0,0.5); }
+        #pause-btn { position: absolute; top: 20px; right: 20px; z-index: 50; background: rgba(255,255,255,0.1); border: 1px solid white; color: white; border-radius: 50%; width: 40px; height: 40px; cursor: pointer; }
+        #pause-overlay { background: rgba(0,0,0,0.8); z-index: 100; }
+        #milestone-msg { position: absolute; top: 15%; width: 100%; text-align: center; color: #f1c40f; font-size: 2.5rem; opacity: 0; transition: 1.5s; font-weight: 700; pointer-events: none; }
+    </style>
+</head>
+<body>
+
+    <div id="hud" class="hidden">
+        <div id="hearts">❤️❤️❤️❤️❤️</div>
+        <div style="margin-top:5px">Steps: <span id="score-val" style="font-weight:700">0</span> / 2400</div>
+        <div>Stars: <span id="coin-val" style="font-weight:700">0</span></div>
+    </div>
+
+    <button id="pause-btn" class="hidden interactive" onclick="togglePause()">II</button>
+
+    <div id="pause-overlay" class="ui hidden interactive">
+        <h1>PAUSED</h1>
+        <button class="btn-start" onclick="togglePause()">RESUME</button>
+        <button class="btn-start" style="margin-top:10px; background:#555;" onclick="location.reload()">HOME</button>
+    </div>
+
+    <div id="milestone-msg">ARIES DISCOVERED</div>
+
+    <div id="home-screen" class="ui interactive">
+        <h1>DREAM STEP</h1>
+        <p style="color: #f1c40f; letter-spacing: 3px; font-weight: 300;">JOURNEY TO THE STARS</p>
+        <button class="btn-start" onclick="initGame()">Begin Journey</button>
+    </div>
+
+    <div id="fail-ui" class="ui hidden interactive">
+        <h1 id="fail-title">DREAM FADED</h1>
+        <p id="fail-msg">You traveled <span id="final-score" style="font-weight:700">0</span> steps</p>
+        <button class="btn-start" onclick="location.reload()">Return Home</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+
+    let state = 'MENU';
+    let score = 0, coins = 0, lives = 5, isPaused = false;
+    let comboCount = 0, lastJumpTime = 0, isBoosted = false;
+    
+    // Bolder player dimensions
+    let player = { x: 150, y: 300, vy: 0, w: 30, h: 70 }; 
+    let platforms = [], items = [], clouds = [], obstacles = [], activeConstellations = [], backgroundStars = [];
+    
+    const zodiacNames = ["ARIES", "TAURUS", "GEMINI", "CANCER", "LEO", "VIRGO", "LIBRA", "SCORPIO", "SAGITTARIUS", "CAPRICORN", "AQUARIUS", "PISCES"];
+    const patterns = [[[10,10], [40,25], [60,60]], [[10,50], [30,40], [50,45], [70,20], [80,60]], [[20,20], [20,80], [40,20], [40,80]], [[50,10], [50,40], [30,70], [70,70]], [[10,60], [30,60], [40,30], [80,20], [90,50], [70,70]], [[10,10], [30,30], [30,70], [60,50], [90,80], [80,20]], [[50,20], [30,50], [50,80], [70,50]], [[80,10], [60,20], [50,50], [40,80], [20,70], [10,40]], [[30,20], [70,20], [70,60], [30,60], [10,40], [90,40]], [[20,20], [80,20], [50,80]], [[10,20], [30,10], [50,30], [70,20], [90,40]], [[10,10], [20,40], [50,50], [80,60], [90,90]]];
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    function playSound(f, t, d, v) {
+        let o = audioCtx.createOscillator(); let g = audioCtx.createGain();
+        o.type = f < 200 ? 'square' : 'sine'; o.frequency.setValueAtTime(f, audioCtx.currentTime);
+        g.gain.setValueAtTime(v, audioCtx.currentTime); g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + d);
+        o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + d);
+    }
+
+    // Larger stickman drawing
+    function drawStickman(x, y, vy) {
+        ctx.strokeStyle = "white"; ctx.lineWidth = 3; ctx.beginPath();
+        // Head
+        ctx.arc(x + 15, y + 15, 10, 0, Math.PI * 2);
+        // Body
+        ctx.moveTo(x + 15, y + 25); ctx.lineTo(x + 15, y + 50);
+        // Arms
+        let armTilt = vy * 3;
+        ctx.moveTo(x + 15, y + 30); ctx.lineTo(x - 10, y + 30 - armTilt);
+        ctx.moveTo(x + 15, y + 30); ctx.lineTo(x + 40, y + 30 - armTilt);
+        // Legs
+        let legSpread = Math.min(15, Math.abs(vy) * 3);
+        ctx.moveTo(x + 15, y + 50); ctx.lineTo(x + 15 - legSpread, y + 75);
+        ctx.moveTo(x + 15, y + 50); ctx.lineTo(x + 15 + legSpread, y + 75);
+        ctx.stroke();
+    }
+
+    function initStars() {
+        for(let i=0; i<100; i++) {
+            backgroundStars.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height,
+                size: Math.random() * 2,
+                twinkle: Math.random() * Math.PI
+            });
+        }
+    }
+
+    function drawStars() {
+        backgroundStars.forEach(s => {
+            s.twinkle += 0.05;
+            let alpha = 0.3 + Math.abs(Math.sin(s.twinkle)) * 0.7;
+            ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+            ctx.beginPath();
+            ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+            ctx.fill();
+            s.x -= 0.5; // slow drift
+            if(s.x < 0) s.x = canvas.width;
+        });
+    }
+
+    function spawnCloud() {
+        clouds.push({ x: canvas.width + 100, y: Math.random() * canvas.height, size: 40 + Math.random() * 70, speed: 0.3 + Math.random(), opacity: 0.1 + Math.random() * 0.2 });
+    }
+
+    function drawClouds() {
+        clouds.forEach((c, i) => {
+            ctx.fillStyle = `rgba(255, 255, 255, ${c.opacity})`;
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, c.size, 0, Math.PI * 2);
+            ctx.arc(c.x + c.size * 0.5, c.y - c.size * 0.3, c.size * 0.6, 0, Math.PI * 2);
+            ctx.fill();
+            c.x -= c.speed;
+            if(c.x < -200) clouds.splice(i, 1);
+        });
+        if(Math.random() < 0.01) spawnCloud();
+    }
+
+    function initGame() {
+        document.getElementById('home-screen').classList.add('hidden');
+        document.getElementById('hud').classList.remove('hidden');
+        document.getElementById('pause-btn').classList.remove('hidden');
+        state = 'PLAYING'; initStars(); resetLevel(); gameLoop();
+    }
+
+    function togglePause() {
+        isPaused = !isPaused;
+        document.getElementById('pause-overlay').classList.toggle('hidden');
+        if(!isPaused) gameLoop();
+    }
+
+    window.addEventListener('keydown', (e) => { if(e.code === 'Space' && state === 'PLAYING' && !isPaused) doJump(); });
+
+    function doJump() {
+        platforms.push({x: player.x - 20, y: player.y + 75, w: 70, h: 8, alpha: 1});
+        player.vy = -9; playSound(400, 'sine', 0.1, 0.1);
+        let now = Date.now();
+        if(now - lastJumpTime < 800) { comboCount++; if(comboCount >= 5 && !isBoosted) triggerBoost(); }
+        else comboCount = 1;
+        lastJumpTime = now;
+    }
+
+    function triggerBoost() { isBoosted = true; playSound(600, 'triangle', 0.5, 0.2); setTimeout(() => { isBoosted = false; comboCount = 0; }, 3000); }
+
+    function gameLoop() {
+        if(state === 'MENU' || isPaused) return;
+        ctx.fillStyle = "#050515"; ctx.fillRect(0,0,canvas.width, canvas.height);
+        
+        drawStars();
+        drawClouds();
+
+        let scrollSpeed = isBoosted ? 12 : 5;
+        if(state === 'PLAYING') {
+            score++;
+            if(score % 2000 === 0) spawnConstellation();
+            if(score >= 24000) state = 'ASCENSION'; 
+        }
+
+        activeConstellations.forEach((c, idx) => {
+            c.x -= scrollSpeed * 0.5;
+            drawConstellationPattern(c);
+            if(c.x < -400) activeConstellations.splice(idx, 1);
+        });
+
+        if(state === 'PLAYING') {
+            player.vy += 0.42; player.y += player.vy;
+            updateObjects(scrollSpeed);
+            drawStickman(player.x, player.y, player.vy);
+            if(player.y < -200 || player.y > canvas.height + 200) loseHeart();
+        } else if (state === 'ASCENSION') {
+            player.y -= 3; 
+            ctx.shadowBlur = 30; ctx.shadowColor = "gold"; ctx.fillStyle = "white";
+            ctx.beginPath(); ctx.arc(player.x+15, player.y+35, 12, 0, Math.PI*2); ctx.fill();
+            ctx.shadowBlur = 0;
+            if(player.y < -100) showWin();
+        }
+
+        document.getElementById('score-val').innerText = Math.floor(score/10);
+        if(state !== 'GAMEOVER') requestAnimationFrame(gameLoop);
+    }
+
+    function spawnConstellation() {
+        let idx = (Math.floor(score / 2000) - 1) % zodiacNames.length;
+        activeConstellations.push({ x: canvas.width + 50, y: 150 + Math.random()*200, pattern: patterns[idx], alpha: 0 });
+        let m = document.getElementById('milestone-msg');
+        m.innerText = zodiacNames[idx] + " DISCOVERED"; m.style.opacity = 1;
+        setTimeout(() => m.style.opacity = 0, 3000);
+    }
+
+    function drawConstellationPattern(c) {
+        ctx.save(); ctx.translate(c.x, c.y); if(c.alpha < 0.6) c.alpha += 0.01;
+        ctx.strokeStyle = `rgba(241, 196, 15, ${c.alpha})`; ctx.lineWidth = 2;
+        ctx.beginPath();
+        c.pattern.forEach((p, i) => { i === 0 ? ctx.moveTo(p[0]*5, p[1]*5) : ctx.lineTo(p[0]*5, p[1]*5); });
+        ctx.stroke();
+        ctx.fillStyle = "white";
+        c.pattern.forEach(p => { ctx.beginPath(); ctx.arc(p[0]*5, p[1]*5, 3, 0, Math.PI*2); ctx.fill(); });
+        ctx.restore();
+    }
+
+    function updateObjects(s) {
+        platforms.forEach((p, i) => { 
+            p.x -= s; p.alpha -= 0.006; 
+            ctx.fillStyle = `rgba(255,255,255,${p.alpha})`; ctx.fillRect(p.x, p.y, p.w, p.h);
+            if(player.vy > 0 && player.x < p.x + p.w && player.x + 30 > p.x && player.y + 75 > p.y && player.y + 75 < p.y + 20) { player.y = p.y - 75; player.vy = 0; }
+        });
+        items.forEach((c, i) => {
+            c.x -= s + 1; ctx.fillStyle = "gold"; ctx.beginPath(); ctx.arc(c.x, c.y, 8, 0, Math.PI*2); ctx.fill();
+            if(Math.hypot(player.x - c.x, player.y - c.y) < 40) { coins++; playSound(800, 'sine', 0.1, 0.05); items.splice(i,1); updateHUD(); }
+        });
+        obstacles.forEach((o, i) => {
+            o.x -= s + 2; ctx.fillStyle = o.t === 'p' ? "#8e44ad" : "#2c3e50";
+            o.t === 'p' ? (ctx.beginPath(), ctx.arc(o.x, o.y, 20, 0, Math.PI*2), ctx.fill()) : ctx.fillRect(o.x, o.y, 40, 15);
+            if(Math.hypot(player.x - o.x, player.y - o.y) < 40) { lives--; playSound(100, 'square', 0.2, 0.1); obstacles.splice(i,1); updateHUD(); if(lives<=0) loseHeart(); }
+        });
+        if(Math.random() < 0.02) items.push({x: canvas.width, y: Math.random()*canvas.height});
+        if(Math.random() < 0.01) obstacles.push({x: canvas.width, y: Math.random()*canvas.height, t: Math.random() > 0.5 ? 'p' : 'a'});
+    }
+
+    function loseHeart() {
+        lives--; updateHUD(); playSound(150, 'square', 0.4, 0.2);
+        if(lives <= 0) { state = 'GAMEOVER'; document.getElementById('fail-ui').classList.remove('hidden'); document.getElementById('final-score').innerText = Math.floor(score/10); }
+        else { player.y = 300; player.vy = 0; platforms = [{x: 100, y: 500, w: 250, h: 12, alpha: 1}]; }
+    }
+
+    function showWin() {
+        state = 'GAMEOVER'; 
+        let ui = document.getElementById('fail-ui');
+        ui.classList.remove('hidden');
+        document.getElementById('fail-title').innerText = "ASCENDED";
+        document.getElementById('fail-title').style.color = "gold";
+        document.getElementById('fail-msg').innerText = "You have become a star in the night sky.";
+    }
+
+    function updateHUD() { document.getElementById('hearts').innerText = "❤️".repeat(Math.max(0, lives)); document.getElementById('coin-val').innerText = coins; }
+    function resetLevel() { score = 0; coins = 0; lives = 5; player.y = 300; player.vy = 0; platforms = [{x: 100, y: 500, w: 250, h: 12, alpha: 1}]; items = []; obstacles = []; activeConstellations = []; updateHUD(); }
+</script>
+</body>
+</html>
